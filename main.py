@@ -10,6 +10,7 @@ BATCH = 128  # Batch size
 EPOCHS = 10  # Training cycles
 LR = 0.01  # Learning rate
 TOP_RATIO = 0.1  # Fraction of gradients to keep
+RANK = 8  # LoRA rank
 DATA_DIR = "./data"  # Directory to store the CIFAR-10 dataset
 
 # Ensure the data directory exists
@@ -32,13 +33,39 @@ train_loader = DataLoader(train_data, batch_size=BATCH, shuffle=True)
 test_loader = DataLoader(test_data, batch_size=BATCH, shuffle=False)
 
 
-# Model definition
+# LoRA module
+class LoRA(nn.Module):
+    def __init__(self, original_layer, rank):
+        """
+        Apply LoRA (Low-Rank Adaptation) to a layer.
+        Args:
+            original_layer (nn.Module): Original layer to be adapted.
+            rank (int): Low-rank dimension for adaptation.
+        """
+        super(LoRA, self).__init__()
+        self.original_layer = original_layer
+        self.rank = rank
+        # Initialize low-rank matrices A and B
+        self.lora_A = nn.Parameter(torch.zeros((rank, original_layer.weight.shape[1])))
+        self.lora_B = nn.Parameter(torch.zeros((original_layer.weight.shape[0], rank)))
+        # Initialize LoRA weights (A and B) with random values
+        nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
+        nn.init.zeros_(self.lora_B)
+
+    def forward(self, x):
+        # Original weight + LoRA adaptation
+        adapted_weight = self.original_layer.weight + torch.matmul(self.lora_B, self.lora_A)
+        return nn.functional.linear(x, adapted_weight, self.original_layer.bias)
+
+
+# Model definition with LoRA applied
 class SimpleCNN(nn.Module):
     def __init__(self):
         super(SimpleCNN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)  # Conv layer 1
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)  # Conv layer 2
-        self.fc1 = nn.Linear(64 * 8 * 8, 256)  # Fully connected 1
+        # Use LoRA for convolutional layers
+        self.conv1 = LoRA(nn.Conv2d(3, 32, kernel_size=3, padding=1), rank=RANK)
+        self.conv2 = LoRA(nn.Conv2d(32, 64, kernel_size=3, padding=1), rank=RANK)
+        self.fc1 = nn.Linear(64 * 8 * 8, 256)  # Fully connected 1 (no LoRA here for simplicity)
         self.fc2 = nn.Linear(256, 10)  # Fully connected 2
         self.pool = nn.MaxPool2d(2, 2)  # Pooling
         self.act = nn.ReLU()  # Activation
